@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ESP32 Weather Station</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 24px; background: #f4f6f8; }
+    .container { max-width: 1100px; margin: auto; }
+    h1 { margin-bottom: 8px; }
+    .status { margin-bottom: 20px; }
+    .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
+    .card, .chart-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    .value { font-size: 2rem; font-weight: bold; margin-top: 8px; }
+    .chart-card { margin-bottom: 20px; }
+    canvas { max-height: 320px; }
+    @media (max-width: 700px) { .cards { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>ESP32 Weather Station</h1>
+    <div class="status">MQTT status: <strong id="status">Connecting...</strong></div>
+
+    <div class="cards">
+      <div class="card">
+        <div>Temperature</div>
+        <div class="value" id="temperature">-- °C</div>
+      </div>
+      <div class="card">
+        <div>Humidity</div>
+        <div class="value" id="humidity">-- %</div>
+      </div>
+      <div class="card">
+        <div>Pressure</div>
+        <div class="value" id="pressure">-- hPa</div>
+      </div>
+    </div>
+
+    <div class="chart-card"><canvas id="temperatureChart"></canvas></div>
+    <div class="chart-card"><canvas id="humidityChart"></canvas></div>
+    <div class="chart-card"><canvas id="pressureChart"></canvas></div>
+  </div>
+
+  <script>
+    // Change this to the WebSocket endpoint exposed by your MQTT broker.
+    // For production, prefer wss:// with authentication/TLS.
+    const MQTT_WS_URL = "ws://YOUR_BROKER:8083/mqtt";
+    const MQTT_TOPIC = "weatherstation/telemetry";
+    const MAX_POINTS = 30;
+
+    const labels = [];
+    const temperatureData = [];
+    const humidityData = [];
+    const pressureData = [];
+
+    function createChart(canvasId, title, label, data, unit) {
+      return new Chart(document.getElementById(canvasId), {
+        type: "line",
+        data: {
+          labels,
+          datasets: [{
+            label,
+            data,
+            tension: 0.25,
+            borderWidth: 2,
+            pointRadius: 2
+          }]
+        },
+        options: {
+          responsive: true,
+          animation: false,
+          plugins: { title: { display: true, text: title } },
+          scales: {
+            y: { title: { display: true, text: unit } }
+          }
+        }
+      });
+    }
+
+    const temperatureChart = createChart(
+      "temperatureChart", "Temperature", "Temperature", temperatureData, "°C"
+    );
+    const humidityChart = createChart(
+      "humidityChart", "Humidity", "Humidity", humidityData, "%"
+    );
+    const pressureChart = createChart(
+      "pressureChart", "Pressure", "Pressure", pressureData, "hPa"
+    );
+
+    function addReading(reading) {
+      const now = new Date().toLocaleTimeString();
+
+      labels.push(now);
+      temperatureData.push(Number(reading.temperature));
+      humidityData.push(Number(reading.humidity));
+      pressureData.push(Number(reading.pressure));
+
+      while (labels.length > MAX_POINTS) {
+        labels.shift();
+        temperatureData.shift();
+        humidityData.shift();
+        pressureData.shift();
+      }
+
+      document.getElementById("temperature").textContent = `${Number(reading.temperature).toFixed(1)} °C`;
+      document.getElementById("humidity").textContent = `${Number(reading.humidity).toFixed(1)} %`;
+      document.getElementById("pressure").textContent = `${Number(reading.pressure).toFixed(1)} hPa`;
+
+      temperatureChart.update();
+      humidityChart.update();
+      pressureChart.update();
+    }
+
+    const client = mqtt.connect(MQTT_WS_URL);
+
+    client.on("connect", () => {
+      document.getElementById("status").textContent = "Connected";
+      client.subscribe(MQTT_TOPIC);
+    });
+
+    client.on("reconnect", () => {
+      document.getElementById("status").textContent = "Reconnecting...";
+    });
+
+    client.on("error", (error) => {
+      console.error("MQTT error:", error);
+      document.getElementById("status").textContent = "Error";
+    });
+
+    client.on("message", (topic, payload) => {
+      if (topic !== MQTT_TOPIC) return;
+
+      try {
+        const reading = JSON.parse(payload.toString());
+        if (["temperature", "humidity", "pressure"].every(k => Number.isFinite(Number(reading[k])))) {
+          addReading(reading);
+        }
+      } catch (error) {
+        console.error("Invalid telemetry payload:", error);
+      }
+    });
+  </script>
+</body>
+</html>
